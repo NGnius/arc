@@ -219,6 +219,9 @@ fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs,
                 let highest_id = highest_bot.id;
                 let highest_cube_id = highest_cubes.id;
                 let lowest_cube_id = lowest_cubes.id;
+                if state.last_sequential_id == usize::MAX {
+                    state.last_sequential_id = highest_cube_id;
+                }
                 // NOTE: IDs are gone through sequentially instead of just retrieving the known ones
                 // because the default user cannot search for non-buyable robots, despite them existing.
                 // This creates gaps in known (i.e. searchable) IDs, despite IDs being sequential.
