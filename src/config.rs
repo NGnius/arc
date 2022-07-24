@@ -15,6 +15,14 @@ pub struct CliArgs {
     /// Robots per page
     #[clap(short, long)]
     pub size: Option<isize>,
+
+    /// Only look for new robots
+    #[clap(short, long)]
+    pub new: bool,
+
+    /// Download known robots
+    #[clap(short, long)]
+    pub known: bool
 }
 
 pub fn parse() -> CliArgs {
