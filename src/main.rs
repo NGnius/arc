@@ -58,7 +58,7 @@ fn build_state(db: &mut Connection, config: &CliArgs) -> DbState {
             id: 0,
             next_page: 0,
             last_page_size: config.size.unwrap_or(DEFAULT_PAGE_SIZE),
-            last_sequential_id: usize::MAX,
+            last_sequential_id: u32::MAX as _,
         }
     } else {
         let state_rows: Vec<rusqlite::Result<DbState>> = db
@@ -71,7 +71,7 @@ fn build_state(db: &mut Connection, config: &CliArgs) -> DbState {
                         id: 0,
                         next_page: 0,
                         last_page_size: page_size,
-                        last_sequential_id: usize::MAX,
+                        last_sequential_id: u32::MAX as _,
                     }
                 } else {
                     state.to_owned()
@@ -84,7 +84,7 @@ fn build_state(db: &mut Connection, config: &CliArgs) -> DbState {
                 id: 0,
                 next_page: 0,
                 last_page_size: config.size.unwrap_or(DEFAULT_PAGE_SIZE),
-                last_sequential_id: usize::MAX,
+                last_sequential_id: u32::MAX as _,
             }
         }
     }
@@ -214,46 +214,52 @@ fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs,
         .query_map([], DbCubeData::map_row).unwrap().collect();
 
     if let Some(Ok(highest_bot)) = latest_bot_row.get(0) {
-        if let Some(Ok(highest_cubes)) = latest_cube_row.get(0) {
-            if let Some(Ok(lowest_cubes)) = oldest_cube_row.get(0) {
-                let highest_id = highest_bot.id;
-                let highest_cube_id = highest_cubes.id;
-                let lowest_cube_id = lowest_cubes.id;
-                if state.last_sequential_id == usize::MAX {
-                    state.last_sequential_id = highest_cube_id;
+        let highest_id = highest_bot.id;
+        let highest_cube_id = if let Some(Ok(highest_cubes)) = latest_cube_row.get(0) {
+            highest_cubes.id
+        } else {
+            0
+        };
+        let lowest_cube_id = if let Some(Ok(lowest_cubes)) = oldest_cube_row.get(0) {
+            lowest_cubes.id
+        } else {
+            usize::MAX
+        };
+
+        if state.last_sequential_id >= u32::MAX as usize {
+            state.last_sequential_id = highest_id;
+        }
+
+        // NOTE: IDs are gone through sequentially instead of just retrieving the known ones
+        // because the default user cannot search for non-buyable robots, despite them existing.
+        // This creates gaps in known (i.e. searchable) IDs, despite IDs being sequential.
+        if config.new {
+            for id in highest_cube_id+1..=highest_id {
+                if let Ok(response) = api.get(id) {
+                    if !persist_bot(db, config, response) {
+                        break;
+                    }
                 }
-                // NOTE: IDs are gone through sequentially instead of just retrieving the known ones
-                // because the default user cannot search for non-buyable robots, despite them existing.
-                // This creates gaps in known (i.e. searchable) IDs, despite IDs being sequential.
-                if config.new {
-                    for id in highest_cube_id+1..=highest_id {
-                        if let Ok(response) = api.get(id) {
-                            if !persist_bot(db, config, response) {
-                                break;
-                            }
-                        }
+            }
+        } else {
+            if config.verbose {
+                println!("Most recent bot has id #{}, existing data for #{} (ignoring down to #{}) to #{}", highest_id, state.last_sequential_id, lowest_cube_id, highest_cube_id);
+            }
+            for id in (0..=highest_id).rev() {
+                if id <= highest_cube_id && id >= state.last_sequential_id {
+                    continue;
+                }
+                if let Ok(response) = api.get(id) {
+                    if !persist_bot(db, config, response) {
+                        break;
                     }
-                } else {
-                    if config.verbose {
-                        println!("Most recent bot has id #{}, existing data for #{} (ignoring down to #{}) to #{}", highest_id, state.last_sequential_id, lowest_cube_id, highest_cube_id);
+                    if state.last_sequential_id - id >= PERIOD {
+                        state.last_sequential_id = id - (id % PERIOD) + PERIOD;
+                        save_state(db, state);
                     }
-                    for id in (0..=highest_id).rev() {
-                        if id <= highest_cube_id && id >= state.last_sequential_id {
-                            continue;
-                        }
-                        if let Ok(response) = api.get(id) {
-                            if !persist_bot(db, config, response) {
-                                break;
-                            }
-                            if state.last_sequential_id - id >= PERIOD {
-                                state.last_sequential_id = id - (id % PERIOD);
-                                save_state(db, state);
-                            }
-                        }
-                        if config.verbose && id % PERIOD == 0 {
-                            println!("Done bot #{}, last persistent id #{}", id, state.last_sequential_id);
-                        }
-                    }
+                }
+                if config.verbose && id % PERIOD == 0 {
+                    println!("Done bot #{}, last persistent id #{}", id, state.last_sequential_id);
                 }
             }
         }
