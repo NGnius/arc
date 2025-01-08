@@ -1,5 +1,6 @@
 mod config;
 mod entities;
+mod thumbnails;
 
 use config::CliArgs;
 use entities::{Entity, DbMetaData, DbCubeData, DbState};
@@ -25,6 +26,15 @@ fn main() {
     let mut state = build_state(&mut db, &config);
 
     save_state(&mut db, &state);
+
+    // start thumbnail download threadpool (if folder provided)
+    let thumbnail_retriever = config.thumbnails.as_ref().map(|folder| thumbnails::ThumbnailRetriever::new(folder, config.verbose));
+    if config.rethumb {
+        if config.verbose {
+            println!("Redownloading all thumbnails, watch out for ghosting");
+        }
+        thumbnail_retriever.as_ref().map(|tr| tr.retrieve_all_known(&mut db));
+    }
     
     // begin scraping
     if config.verbose {
@@ -40,13 +50,15 @@ fn main() {
         if config.verbose {
             println!("Downloading robot cubes data for all known robots");
         }
-        download_missing_bots(&mut db, &config, &api);
+        download_missing_bots(&mut db, &config, &api, &thumbnail_retriever);
     } else {
         if config.verbose {
             println!("Looking for non-searchable bots, activating windowmaker module");
         }
-        download_all_bots(&mut db, &mut state, &config, &api);
+        download_all_bots(&mut db, &mut state, &config, &api, &thumbnail_retriever);
     }
+
+    thumbnail_retriever.map(|tr| tr.finalize());
     if config.verbose {
         println!("Done.");
     }
@@ -153,7 +165,7 @@ fn search_bots(db: &mut Connection, config: &CliArgs, state: &mut DbState, api: 
     }
 }
 
-fn download_missing_bots(db: &mut Connection, config: &CliArgs, api: &FactoryAPI) {
+fn download_missing_bots(db: &mut Connection, config: &CliArgs, api: &FactoryAPI, thumbnail_ret: &Option<thumbnails::ThumbnailRetriever>) {
     let missing_bots: Vec<rusqlite::Result<DbMetaData>> = db
         .prepare(
             "SELECT * FROM ROBOT_METADATA rm WHERE rm.id NOT IN (SELECT id from ROBOT_CUBES rc);"
@@ -165,12 +177,12 @@ fn download_missing_bots(db: &mut Connection, config: &CliArgs, api: &FactoryAPI
     for bot in missing_bots {
         if let Ok(bot) = bot {
             let response = api.get(bot.id).unwrap();
-            persist_bot(db, config, response);
+            persist_bot(db, config, response, thumbnail_ret);
         }
     }
 }
 
-fn persist_bot(db: &mut Connection, config: &CliArgs, response: FactoryInfo<FactoryRobotGetInfo>) -> bool {
+fn persist_bot(db: &mut Connection, config: &CliArgs, response: FactoryInfo<FactoryRobotGetInfo>, thumbnail_ret: &Option<thumbnails::ThumbnailRetriever>) -> bool {
     if response.status_code != 200 {
         eprintln!("Got response status {}, self-destructing...", response.status_code);
         return false;
@@ -184,6 +196,7 @@ fn persist_bot(db: &mut Connection, config: &CliArgs, response: FactoryInfo<Fact
         }
     }
     let robot_meta: DbMetaData = robo_data.clone().into();
+    thumbnail_ret.as_ref().map(|tr| tr.retrieve(&robot_meta));
     db.execute(
         "INSERT OR REPLACE INTO ROBOT_METADATA (
         id, name, description, thumbnail, added_by, added_by_display_name, added_date, expiry_date, cpu, total_robot_ranking, rent_count, buy_count, buyable, featured, combat_rating, cosmetic_rating
@@ -200,7 +213,7 @@ fn persist_bot(db: &mut Connection, config: &CliArgs, response: FactoryInfo<Fact
     true
 }
 
-fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs, api: &FactoryAPI) {
+fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs, api: &FactoryAPI, thumbnail_ret: &Option<thumbnails::ThumbnailRetriever>) {
     let latest_bot_row: Vec<rusqlite::Result<DbMetaData>> = db
         .prepare("SELECT * from ROBOT_METADATA rm ORDER BY rm.id DESC LIMIT 1;").unwrap()
         .query_map([], DbMetaData::map_row).unwrap().collect();
@@ -236,7 +249,7 @@ fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs,
         if config.new {
             for id in highest_cube_id+1..=highest_id {
                 if let Ok(response) = api.get(id) {
-                    if !persist_bot(db, config, response) {
+                    if !persist_bot(db, config, response, thumbnail_ret) {
                         break;
                     }
                 }
@@ -250,7 +263,7 @@ fn download_all_bots(db: &mut Connection, state: &mut DbState, config: &CliArgs,
                     continue;
                 }
                 if let Ok(response) = api.get(id) {
-                    if !persist_bot(db, config, response) {
+                    if !persist_bot(db, config, response, thumbnail_ret) {
                         break;
                     }
                     if state.last_sequential_id - id >= PERIOD {

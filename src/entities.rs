@@ -43,6 +43,7 @@ pub trait Entity: Sized {
 
     fn to_params(&self) -> Vec<&dyn rusqlite::ToSql>;
 
+    #[allow(dead_code)]
     fn id(&self) -> usize;
 }
 

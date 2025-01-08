@@ -10,3 +10,6 @@ libfj = { version = "0.6", features = ["robocraft", "simple"] }
 
 clap = { version = "3.0", features = ["derive"] }
 rusqlite = { version = "0.28" }
+
+threadpool = { version = "1.8" }
+ureq = { version = "2.5" }

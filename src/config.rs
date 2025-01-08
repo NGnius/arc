@@ -22,9 +22,22 @@ pub struct CliArgs {
 
     /// Download known robots
     #[clap(short, long)]
-    pub known: bool
+    pub known: bool,
+
+    /// Download thumbnails to this folder (default: don't download thumbnails)
+    #[clap(short, long)]
+    pub thumbnails: Option<std::path::PathBuf>,
+
+    /// Re-download all thumbnails
+    #[clap(long)]
+    pub rethumb: bool,
 }
 
 pub fn parse() -> CliArgs {
-    CliArgs::parse()
+    let args = CliArgs::parse();
+    if args.rethumb && args.thumbnails.is_none() {
+        eprintln!("Missing required thumbnails folder in CLI args");
+        panic!("How do I re-download all thumbnails without a thumbnails folder to put them in?");
+    }
+    args
 }
